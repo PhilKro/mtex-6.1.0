@@ -1,0 +1,234 @@
+%% Initial Setup
+clear
+close all
+plotx2west
+plotzOutOfPlane
+
+%% 1. Load Data
+
+% crystal symmetry, make sure to use correct space group and c/a ratio, currently Zn is
+% used
+dir = 'userScripts/Annalena/';
+fname = 'AA-04 500 Nd 1500 Specimen 1 Site 5 Map Data 4.h5oina';
+path = append(dir, fname);
+
+
+% crystal symmetry
+% Alumina
+% CS = crystalSymmetry('32', 'x||a');
+% CS = crystalSymmetry.load("Rhenium.cif");
+
+%if loading the CS from the h5oina file
+ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
+CS = ebsd.CS;
+
+ebsd = ebsd(inpolygon(ebsd, [0 0 80 60]));
+
+%perform corrections for misaligned axes
+rot = rotation.byAxisAngle(yvector,180*degree);
+ebsd = rotate(ebsd,rot,'keepEuler');
+ebsd.orientations = project2FundamentalRegion(ebsd.orientations);
+
+%% test CS
+ipf=ipfTSLKey(ebsd.CS);
+% figure;
+% plot(ipf)
+% figure;
+% plot(ebsd.CS,'figSize','small')
+% annotate(ebsd.CS.aAxis,'MarkerFaceColor','r','label','a','backgroundColor','w')
+% annotate(ebsd.CS.bAxis,'MarkerFaceColor','r','label','b','backgroundColor','w')
+% annotate(-vector3d.Y,'MarkerFaceColor','green','label','-y','backgroundColor','w')
+% annotate(vector3d.X,'MarkerFaceColor','green','label','x','backgroundColor','w')
+
+%% plot ebsd
+% figure;
+% ipf.inversePoleFigureDirection=xvector;
+% colors = ipf.orientation2color(ebsd('indexed').orientations);
+% plot(ebsd('indexed'),colors)
+% title('IPF X')
+% 
+% ipf.inversePoleFigureDirection = yvector;
+% colors = ipf.orientation2color(ebsd('indexed').orientations);
+% nextAxis
+% plot(ebsd('indexed'),colors)
+% title('IPF Y')
+% 
+% ipf.inversePoleFigureDirection = zvector;
+% colors = ipf.orientation2color(ebsd('indexed').orientations);
+% nextAxis
+% plot(ebsd('indexed'),colors)
+% title('IPF Z')
+
+%% Initial grain reconstruction and pseudo symmetry cleanup
+% % from https://mtex-toolbox.github.io/SlipSystemAlumina.html
+% 
+% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'alpha',1);
+% 
+% % all Corundum Corundum boundaries
+% gB = grains.boundary('indexed');
+% 
+% % define the pseudo symmetry
+% pseudoSym = orientation.byAxisAngle(grains.CS.cAxis,180*degree);
+% 
+% % allow for a three 3 degree threshold
+% ispseudoBnd = angle(gB.misorientation,pseudoSym)<3*degree;
+% 
+% 
+% % [grains, parentId] = grains.merge(gB(ispseudoBnd),'calcMeanOrientation',...
+% %   @(g) updateOri(g,pseudoSym));
+% warning('Takes forever')
+% [~] = evalc("[grains, parentId] = grains.merge(gB(ispseudoBnd),'calcMeanOrientation',@(g) updateOri(g,pseudoSym));");
+% 
+% flipPseudo = ~(angle(ebsd.orientations,grains(parentId(ebsd.grainId)).meanOrientation)> 10*degree);
+% 
+% ebsd(flipPseudo).orientations = ebsd(flipPseudo).orientations * pseudoSym;
+% 
+% % cKey.inversePoleFigureDirection = zvector;
+% % plot(ebsd,cKey.orientation2color(ebsd.orientations))
+
+%% Final grain reconstruction
+
+[grains, ebsd.grainId] = calcGrains(ebsd, 'angle', 5*degree, 'alpha',1, 'minPixel',5);
+
+% Smooth boundaries to get better trace directions
+grains = smooth(grains, 5);
+
+plot(grains, grains.meanOrientation)
+
+%% Plot grains with crystal shapes
+cS = crystalShape.hex(ebsd.CS);
+
+figure;
+ipf.inversePoleFigureDirection = zvector;
+grainColors = ipf.orientation2color(grains.meanOrientation);
+
+plot(grains,grainColors,'FaceAlpha',0.5,'linewidth',2)
+isBig = grains.numPixel>100;
+
+% define a list of crystal shape that is oriented as the grain mean
+% orientation and scaled according to the grain area
+cSGrains = grains(isBig).meanOrientation * cS * 0.7 * sqrt(grains(isBig).area);
+
+% now we can plot these crystal shapes at the grain centers
+hold on
+plot(grains(isBig).centroid + cSGrains,'FaceColor','r','FaceAlpha',0.7)
+hold off
+drawNow(gcm,'final')
+
+%% 3. Identify Sigma 3 Boundaries (The 3 Misorientation Parameters)
+% Define the crystal symmetry
+CS = grains.CS;
+
+% Extract all grain boundaries
+gB = grains.boundary('indexed','indexed');
+
+% Define Sigma misorientations (axis <0001>)
+sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
+sigmaNames = {'Sigma 3', 'Sigma 7', 'Sigma 13', 'Sigma 19', 'Sigma 21'};
+colors = {'r', 'g', 'b', 'c', 'm'};
+
+sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
+
+% Needed for Section 6
+sigma3 = sigmas(1);
+
+isSigmaAny = false(size(gB));
+
+% Visualize where they are
+figure;
+plot(grains, grainColors, 'faceAlpha', 0.3)
+hold on
+
+for i = 1:length(sigmas)
+    isSigma = angle(gB.misorientation, sigmas(i)) < 5*degree;
+    isSigmaAny = isSigmaAny | isSigma;
+    
+    plot(gB(isSigma), 'lineColor', colors{i}, 'lineWidth', 2, 'DisplayName', sigmaNames{i})
+
+    if i == 1
+        % Re-create gB3 for Section 6
+        gB3 = gB(isSigma); 
+    end
+end
+
+legend show
+title('Identified Sigma Boundaries')
+hold off
+
+%% 4. Calculate Grain Boundary Normal Distribution
+
+% GBND for ALL boundaries
+warning('Use a nonneg kernel??, use "nonneg" flag.')
+gbnd = calcGBND(gB,grains,'halfwidth',7.5*degree); %,'nonneg');
+
+% GBCD for sigma boundaries
+gbcd = calcGBND(gB(isSigmaAny), grains,'halfwidth',7.5*degree);
+
+% Loop through the sigmas and add up the spherical harmonics afterwards
+gbcd_reccomended = 0;
+for i = 1:length(sigmas)
+    gbcd_reccomended = gbcd_reccomended + calcGBND(gB,grains,sigmas(i),'halfwidth',7.5*degree);
+end
+
+%% 5. Visualize the 5-Parameter Character
+figure;
+
+% Plot the GBND in the fundamental region of the crystal
+plot(gbnd) %, 'fundamentalRegion')
+mtexColorbar
+title('GBND (Crystal Frame)')
+
+% Annotate the expected boundary plane {0001}
+
+h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+
+figure;
+
+% Plot the GBCD in the fundamental region of the crystal
+plot(gbcd) %, 'fundamentalRegion')
+mtexColorbar
+title('GBCD for sigma boundaries (Crystal Frame)')
+
+% Annotate the expected boundary plane {0001}
+
+h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+
+figure;
+
+% Plot the GBCD, calculated the recommended way
+plot(gbcd) %, 'fundamentalRegion')
+mtexColorbar
+title('GBCD (recommended) for sigma boundaries (Crystal Frame)')
+
+% Annotate the expected boundary plane {0001}
+
+h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+%% 6. Checking consistency for individual segments
+% While we can't know the exact plane for a single segment, we can check
+% if the observed trace is CONSISTENT with a specific plane .
+
+sigmaGBS = gB(isSigma)
+
+[~,gbcd_max_miller] = max(gbcd);
+
+traces = sigmaGBS.direction;
+
+traces_in_GrainCoords = inv(grains(sigmaGBS.grainId(:,1)).meanOrientation).*traces;
+
+trace_in_maxgbcd = angle(traces_in_GrainCoords, gbcd_max_miller)/degree>70*degree;
+
+%fractionCoherent = sum(gB3.segLength(isCoherent)) / sum(gB3.segLength);
+
+%fprintf('Fraction of Sigma 3 boundaries consistent with coherent {111} plane: %.1f%%\n', fractionCoherent * 100);
+
+% Highlight coherent vs incoherent candidates
+figure;
+plot(grains, grainColors, 'faceAlpha', 0.3)
+hold on
+plot(sigmaGBS, 'lineColor', 'b', 'lineWidth', 2, 'DisplayName', 'Inconsistent with GBCD max')
+%plot(sigmaGBS(trace_in_maxgbcd), 'lineColor', 'r', 'lineWidth', 2, 'DisplayName', 'Consistent with GBCD max')
+legend
+title('Trace Consistency Analysis')

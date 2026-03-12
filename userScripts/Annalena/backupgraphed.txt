@@ -1,0 +1,184 @@
+function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratioThreshold, fractionThreshold)
+% GRAPHEDPSEUDOSYMREMOVAL Removes EBSD artifacts using a graph-based perimeter fraction approach.
+%
+% Strategy:
+%   1. Calculate the fraction of the boundary that is pseudo-symmetric for each grain.
+%   2. Identify "speckles" as grains with high pseudo-fraction (>0.5) AND 
+%      high perimeter/area ratio (>0.37).
+%   3. Build a graph of connected speckles and their hosts.
+%   4. Rotate speckles to match the host orientation and merge.
+%
+% Inputs:
+%   ebsd              - EBSD data
+%   grains            - grain2d object
+%   pseudoSym         - list of pseudo-symmetry rotations
+%   ratioThreshold    - (Optional) Threshold for Perimeter/Size ratio (default 0.37)
+%   fractionThreshold - (Optional) Threshold for PseudoBoundary/TotalBoundary (default 0.5)
+%
+% Outputs:
+%   grains - Updated grains
+%   ebsd   - Updated EBSD data (orientations rotated)
+
+    if nargin < 4 || isempty(ratioThreshold)
+        ratioThreshold = 0.37;
+    end
+    if nargin < 5 || isempty(fractionThreshold)
+        fractionThreshold = 0.5;
+    end
+
+    %% 1. Identify Pseudosymmetry Boundaries
+    % Get all inner boundaries
+    gB = grains.boundary('indexed', 'indexed');
+    
+    % Check misorientation against pseudoSym list (tolerance 5 degrees)
+    isPseudo = false(size(gB));
+    for k = 1:length(pseudoSym)
+        isPseudo = isPseudo | (angle(gB.misorientation, pseudoSym(k)) < 5*degree);
+    end
+    
+    % Keep only the pseudo-symmetric segments for analysis
+    gB_ps = gB(isPseudo);
+    
+    %% 2. Calculate Metrics (Perimeter & Fraction)
+    % We use accumarray to sum boundary lengths by Grain ID
+    % Note: We compute 'totalPerimeter' manually to ensure consistency with the 
+    % 'pseudoPerimeter' calculation (sum of segLength).
+    
+    % A. Total Perimeter per Grain
+    all_gB = grains.boundary;
+    ids_all = all_gB.grainId;
+    len_all = all_gB.segLength;
+    
+    % Flatten ID lists (boundary connects two grains, contributes to both)
+    % Filter out ID 0 (outer boundary)
+    valid_mask = ids_all > 0;
+    
+    flat_ids = [ids_all(valid_mask(:,1), 1); ids_all(valid_mask(:,2), 2)];
+    flat_len = [len_all(valid_mask(:,1));    len_all(valid_mask(:,2))];
+    
+    maxId = max(grains.id); % Ensure table covers all grains
+    if max(flat_ids) > maxId, maxId = max(flat_ids); end
+    
+    totalPerimeter = accumarray(flat_ids, flat_len, [maxId, 1]);
+    
+    % B. Pseudosymmetry Perimeter per Grain
+    ids_ps = gB_ps.grainId;
+    len_ps = gB_ps.segLength;
+    
+    flat_ids_ps = [ids_ps(:,1); ids_ps(:,2)];
+    flat_len_ps = [len_ps;    len_ps];
+    
+    pseudoPerimeter = accumarray(flat_ids_ps, flat_len_ps, [maxId, 1]);
+    
+    %% 3. Artifact Identification (Speckles)
+    % Map metrics to the current list of grains
+    grain_ids = grains.id;
+    
+    g_totalP   = totalPerimeter(grain_ids);
+    g_pseudoP  = pseudoPerimeter(grain_ids);
+    g_numPixel = grains.numPixel;
+    
+    % Metric 1: Ratio (Boundary Length / Grain Size)
+    g_ratio = g_totalP ./ g_numPixel;
+    
+    % Metric 2: Fraction (Pseudo Boundary / Total Boundary)
+    g_fraction = g_pseudoP ./ g_totalP;
+    g_fraction(isnan(g_fraction)) = 0; % Handle grains with 0 perimeter (singularities)
+    
+    % Logic: Speckle if Ratio > 0.37 AND Fraction > 0.5
+    local_isSpeckle = (g_ratio > ratioThreshold) & (g_fraction > fractionThreshold);
+    
+    % Create global lookup for speckle status
+    isSpeckle = false(maxId, 1);
+    isSpeckle(grain_ids) = local_isSpeckle;
+    
+    %% 4. Graph Clustering
+    % Isolate pseudo-boundaries where at least one neighbor is a speckle
+    edge_mask = isSpeckle(ids_ps(:,1)) | isSpeckle(ids_ps(:,2));
+    
+    % Edges for the graph (Grain A <-> Grain B)
+    edges = ids_ps(edge_mask, :);
+    
+    if isempty(edges)
+        fprintf('No pseudo-symmetry artifacts found.\n');
+        return;
+    end
+    
+    % Build Graph and find connected components
+    G = graph(edges(:,1), edges(:,2));
+    bins = conncomp(G); % Returns component ID for each node index
+    
+    % Nodes involved in the selected edges
+    involved_nodes = unique(edges(:));
+    unique_bins = unique(bins(involved_nodes));
+    
+    %% 5. Alignment and Rotation
+    % Prepare to rotate speckles
+    rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
+    
+    % Optimization: Pre-fetch numPixels
+    numPixelLUT = zeros(maxId, 1);
+    numPixelLUT(grain_ids) = grains.numPixel;
+    
+    for i = 1:length(unique_bins)
+        b = unique_bins(i);
+        
+        % Get all grains in this cluster
+        cluster_ids = find(bins == b);
+        
+        % Filter for grains present in the list
+        cluster_ids = cluster_ids(ismember(cluster_ids, grain_ids));
+        
+        if length(cluster_ids) < 2, continue; end
+        
+        % Identify Host: Grain with largest area
+        [~, max_idx] = max(numPixelLUT(cluster_ids));
+        host_id = cluster_ids(max_idx);
+        
+        % Identify Speckles: All other grains in the cluster
+        speckle_ids = cluster_ids(cluster_ids ~= host_id);
+        
+        % Determine Rotations
+        ind_host = grains.id2ind(host_id);
+        ori_host = grains(ind_host).meanOrientation;
+        
+        inds_speckle = grains.id2ind(speckle_ids);
+        
+        for k = 1:length(speckle_ids)
+            gid = speckle_ids(k);
+            ori_speckle = grains(inds_speckle(k)).meanOrientation;
+            
+            % Find optimal symmetry to match host
+            mori = inv(ori_speckle) * ori_host;
+            [~, sym_idx] = min(angle(mori, pseudoSym));
+            
+            rotations(gid) = pseudoSym(sym_idx);
+        end
+    end
+    
+    %% 6. Update and Merge
+    % A. Apply rotations to EBSD data
+    valid_grain_mask = ebsd.grainId > 0;
+    pixel_grain_ids = ebsd.grainId(valid_grain_mask);
+    
+    pixel_rots = rotations(pixel_grain_ids);
+    to_update = ~isnan(pixel_rots);
+    
+    if any(to_update)
+        valid_indices = find(valid_grain_mask);
+        update_indices = valid_indices(to_update);
+        
+        ebsd(update_indices).orientations = ebsd(update_indices).orientations .* pixel_rots(to_update);
+        fprintf('Corrected %d pixels in pseudo-symmetry artifacts.\n', length(update_indices));
+    end
+    
+    % B. Merge Grains
+    % Merge the boundaries identified in the graph step (where we clustered artifacts)
+    gB_to_merge = gB_ps(edge_mask);
+    
+    if ~isempty(gB_to_merge)
+        [grains, parentId] = merge(grains, gB_to_merge);
+        ebsd.grainId = parentId(ebsd.grainId);
+        fprintf('Merged %d pseudo-symmetry boundaries.\n', length(gB_to_merge));
+    end
+end
