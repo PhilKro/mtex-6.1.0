@@ -23,13 +23,13 @@ ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
 CS = ebsd.CS;
 
 %smallest possible testSet
-ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
+% ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
 
 %small testSet includes straight boundary
 % ebsd = ebsd(inpolygon(ebsd, [5 2 50 30]));
 
 %larger testSet includes this coral grains
-% ebsd = ebsd(inpolygon(ebsd, [5 2 50 200]));
+ebsd = ebsd(inpolygon(ebsd, [5 2 50 200]));
 
 %perform corrections for misaligned axes
 rot = rotation.byAxisAngle(yvector,180*degree);
@@ -76,8 +76,8 @@ ipf = ipfColorKey(ebsd.CS);
 
 [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
 
-figure; plot(grains, grains.meanOrientation); title('Pre-cleaned grains');
-exportScaledFigure(gcf, 'Pre-cleaned grains.png')
+% figure; plot(grains, grains.meanOrientation); title('Pre-cleaned grains');
+% exportScaledFigure(gcf, 'Pre-cleaned grains.png')
 
 grains0 = grains;
 ebsd0 = ebsd;
@@ -92,9 +92,9 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 
 %the grains output of this code still has a NaN orientation problem, just
 %recalculate grains
-[~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3);
-figure;
-plot(ebsd, ebsd.orientations)
+[~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
+% figure;
+% plot(ebsd, ebsd.orientations)
 
 %% Parameter Analysis for Pseudo Symmetry Grains (Debug)
 % % Identify grains involved in pseudo-symmetry boundaries
@@ -124,47 +124,13 @@ plot(ebsd, ebsd.orientations)
 % figure; scatter(check_sz, check_PA); xlabel('numPixel'); ylabel('sum(segLength)/numPixel'); title('Surface/Volume vs Size');
 % figure; plot(grains.boundary); hold on; plot(grains_check, check_curv); mtexColorbar
 % figure; plot(grains.boundary); hold on; plot(grains_check, check_PA); mtexColorbar
-% 
-% %% 2. First cleanup: Size only (< 20 pixels)
-% % Using threshold 1 and weight 19.5 ensures grains < 20 pixels are removed.
-% [grains, ebsd] = removePseudoSymmetry(ebsd, grains, pseudoSym, ...
-%     'sizeOnly', true, ...
-%     'threshold', 1, ...
-%     'sizeWeight', 19.5);
-% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
-% % grains_postSize = grains;
-% % ebsd_postSize = ebsd;
-% % figure; plot(grains_postSize, grains_postSize.meanOrientation); title('First run, Small supersymmetry removed') 
-% 
-% %% 3. Second cleanup, curvature
-% % grains = grains_postSize;
-% % ebsd= ebsd_postSize;
-% % 4. Second cleanup: Curvature only (Threshold 2.5)
-% [grains, ebsd] = removePseudoSymmetry(ebsd, grains, pseudoSym, ...
-%     'curvatureOnly', true, ...
-%     'threshold', 3.5);
-% 
-% warning('The recalculation of the grains is very slow, can we omit that? Starting now.')
-% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
-% warning('Finished.')
-% % figure; plot(grains, grains.meanOrientation); title('Second run, high curvature removed') 
-% 
-% %% 4. Third cleanup, grainSize again
-% [grains, ebsd] = removePseudoSymmetry(ebsd, grains, pseudoSym, ...
-%     'sizeOnly', true, ...
-%     'threshold', 1, ...
-%     'sizeWeight', 24.5, ...
-%     'ignoreMAD',true);
-% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
-% % figure; plot(grains, grains.meanOrientation); title('Third run, small grains removed') 
-
-
 %% Final grain reconstruction
 
-[grains, ebsd.grainId] = calcGrains(ebsd, 'angle', 5*degree, 'alpha',1, 'minPixel',5);
+[grains, ebsd('indexed').grainId] = calcGrains(ebsd('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
 
 % Smooth boundaries to get better trace directions
 grains = smooth(grains, 5);
+grainColors = ipf.orientation2color(grains.meanOrientation);
 
 % Extract all grain boundaries
 gB = grains.boundary('indexed','indexed');
@@ -224,8 +190,7 @@ exportScaledFigure(gcf, 'Identified_Sigma_Boundaries.png')
 %% 4. Calculate Grain Boundary Normal Distribution
 
 % GBND for ALL boundaries
-warning('Use a nonneg kernel??, use "nonneg" flag.')
-gbnd = calcGBND(gB,grains,'halfwidth',7.5*degree); %,'nonneg');
+gbnd = calcGBND(gB,grains,'halfwidth',7.5*degree);
 
 % GBCD for sigma boundaries
 gbcd = calcGBND(gB(isSigmaAny), grains,'halfwidth',7.5*degree);

@@ -57,20 +57,20 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     bins = conncomp(G); % `bins(i)` is the cluster ID for grain with ID `i`
 
     %% For testing: Plot the clusters
-    clusterIds = zeros(length(grains),1);
-    valid_ids_for_plot = grains.id(grains.id <= length(bins));
-    if ~isempty(valid_ids_for_plot)
-        clusterIds(grains.id2ind(valid_ids_for_plot)) = bins(valid_ids_for_plot);
-    end
-
-    rng(42);
-    cmap = hsv(50);
-
-    figure;
-    plot(grains, mod(clusterIds - 1, 50) + 1, 'micronbar', 'off');
-    colormap(cmap(randperm(50), :));
-    title('Pseudo-Symmetry Clusters');
-    drawnow;
+    % clusterIds = zeros(length(grains),1);
+    % valid_ids_for_plot = grains.id(grains.id <= length(bins));
+    % if ~isempty(valid_ids_for_plot)
+    %     clusterIds(grains.id2ind(valid_ids_for_plot)) = bins(valid_ids_for_plot);
+    % end
+    % 
+    % rng(42);
+    % cmap = hsv(50);
+    % 
+    % figure;
+    % plot(grains, mod(clusterIds - 1, 50) + 1, 'micronbar', 'off');
+    % colormap(cmap(randperm(50), :));
+    % title('Pseudo-Symmetry Clusters');
+    % drawnow;
     %% 2. Calculate Metrics & Identify Speckles
     % A. Total Perimeter per Grain
     all_gB = grains.boundary;
@@ -111,6 +111,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     % Check for MAD property to use as a tie-breaker
     useMAD = false;
     if ~disregardMAD && (isfield(ebsd.prop, 'MAD') || isfield(ebsd.prop, 'mad'))
+        warning('MAD implementation is shakey!')
         useMAD = true;
         madProp = 'MAD'; if isfield(ebsd.prop, 'mad'), madProp = 'mad'; end
         validID = ebsd.grainId > 0;
@@ -130,24 +131,29 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         % Identify speckles and hosts within the cluster
         is_speckle_in_cluster = isSpeckle(cluster_ids);
         speckle_ids = cluster_ids(is_speckle_in_cluster);
-        host_ids_candidate = cluster_ids(~is_speckle_in_cluster);
         
         if isempty(speckle_ids), continue; end % No speckles to remove in this cluster
 
         % Determine the single host for the cluster
         host_id = 0;
-        if ~isempty(host_ids_candidate)
-            % Host is the largest non-speckle grain
-            [~, max_idx] = max(g_numPixel(host_ids_candidate));
-            host_id = host_ids_candidate(max_idx);
-        else
-            % All grains in cluster are speckles. Host is the "best" one.
-            if useMAD && any(~isnan(grainMeanMAD(speckle_ids)))
-                [~, min_mad_idx] = min(grainMeanMAD(speckle_ids));
-                host_id = speckle_ids(min_mad_idx);
+        candidates = cluster_ids;
+        
+        if ~isempty(candidates)
+            cand_sizes = g_numPixel(candidates);
+            
+            if useMAD
+                % MAD is main criterion (if not disregarded)
+                % Constraint: Host must not be "comparatively small" (Top ~20% of candidates)
+                max_s = max(cand_sizes);
+                is_large_enough = cand_sizes >= 0.2 * max_s;
+                
+                valid_cands = candidates(is_large_enough);
+                [~, min_mad_idx] = min(grainMeanMAD(valid_cands));
+                host_id = valid_cands(min_mad_idx);
             else
-                [~, max_size_idx] = max(g_numPixel(speckle_ids));
-                host_id = speckle_ids(max_size_idx);
+                % Size is main criterion
+                [~, max_idx] = max(cand_sizes);
+                host_id = candidates(max_idx);
             end
         end
         
@@ -156,30 +162,37 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         % Get host orientation
         ori_host = grains(grains.id2ind(host_id)).meanOrientation;
         
-        fig = figure;
-        plot(grains(grains.id2ind(cluster_ids)), grains(grains.id2ind(cluster_ids)).meanOrientation)
-        hold on
-        nextAxis
-        plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
-        hold on
-        plot(grains(grains.id2ind(speckle_ids)), 'FaceColor','b')
-        nextAxis
-        plot(grains(grains.id2ind(cluster_ids)))
-        hold on
-        plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
+        % For troubleshooting
+        % fig = figure;
+        % plot(grains(grains.id2ind(cluster_ids)), grains(grains.id2ind(cluster_ids)).meanOrientation)
+        % hold on
+        % nextAxis
+        % plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
+        % hold on
+        % plot(grains(grains.id2ind(speckle_ids)), 'FaceColor','b')
+        % nextAxis
+        % plot(grains(grains.id2ind(cluster_ids)))
+        % hold on
+        % plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
 
-        % Determine rotations for all speckles to be merged into the host
+        % Determine rotations for all other grains to be merged into the host
         all_syms = [pseudoSym, inv(pseudoSym)]; % Consider inverse symmetries too
-        for k = 1:length(speckle_ids)
-            s_id = speckle_ids(k);
+        for k = 1:length(cluster_ids)
+            s_id = cluster_ids(k);
             if s_id == host_id, continue; end
+            
+            % Only rotate and merge if the grain is actually a speckle
+            if ~isSpeckle(s_id)
+                continue;
+            end
             
             ori_speckle = grains(grains.id2ind(s_id)).meanOrientation;
 
            % Exclude grains that already have an orientation close to the host
             if angle(ori_speckle, ori_host) < 10*degree
                 hold on
-                plot(grains(grains.id2ind(s_id)), 'FaceColor','w')
+                % For troubleshooting
+                % plot(grains(grains.id2ind(s_id)), 'FaceColor','w')
                 continue;
             end
             
@@ -189,11 +202,20 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
             [~, sym_idx] = min(angle(mori, all_syms));
             rotations(s_id) = all_syms(sym_idx);
             hold on
-            plot(grains(grains.id2ind(s_id)), 'FaceColor','k')
+
+            % For troubleshooting
+            % plot(grains(grains.id2ind(s_id)), 'FaceColor','k')
         end
-        close(fig)
+        % For troubleshooting
+        % close(fig)
+
         % Flag all internal pseudo-sym boundaries within this cluster for merging
-        gB_cluster_mask = ismember(gB_ps.grainId(:,1), cluster_ids) & ismember(gB_ps.grainId(:,2), cluster_ids);
+        % Only merge boundaries where at least one side is a speckle.
+        % (Preserves boundaries between two "real" grains even if they are pseudo-symmetric)
+        ids_in_cluster = ismember(gB_ps.grainId(:,1), cluster_ids) & ismember(gB_ps.grainId(:,2), cluster_ids);
+        at_least_one_speckle = isSpeckle(gB_ps.grainId(:,1)) | isSpeckle(gB_ps.grainId(:,2));
+        
+        gB_cluster_mask = ids_in_cluster & at_least_one_speckle;
         gB_to_merge_mask = gB_to_merge_mask | gB_cluster_mask;
     end
 

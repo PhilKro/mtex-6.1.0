@@ -119,6 +119,7 @@ function [grains, ebsd] = removePseudoSymmetry(ebsd, grains, pseudoSym, varargin
     % - High Curvature + Small Grain = High Score -> Merge (Pseudo-Symmetry Artifact)
     % - Low Curvature + Big Grain    = Low Score  -> Keep  (Real Twin)
     if sizeOnly
+        
         w_curv = 0;
         fprintf('Note: Pseudo-symmetry cleanup running in size-only mode.\n');
     end
@@ -187,7 +188,7 @@ function [grains, ebsd] = removePseudoSymmetry(ebsd, grains, pseudoSym, varargin
     % Vectorize rotation to avoid slow loop over grains
     countChanged = 0;
     % Initialize with NaNs to indicate no rotation needed
-    grainRotations = orientation.nan(length(grains), 1, pseudoSym(1).CS,pseudoSym(1).CS);
+    grainRotations = orientation.nan(length(grains), 1, pseudoSym(1).CS);
     
     for k = 1:length(uBadIds)
         bid = uBadIds(k);
