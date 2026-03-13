@@ -106,8 +106,11 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
 
     %% 3. Process Clusters: Determine Rotations and Merges
     rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
-    gB_to_merge_mask = false(size(gB_ps));
-
+    
+    % Optimization: Pre-fetch orientations for O(1) lookup
+    grainOrientations = orientation.nan(maxId, 1, pseudoSym(1).CS);
+    grainOrientations(grains.id) = grains.meanOrientation;
+    
     % Check for MAD property to use as a tie-breaker
     useMAD = false;
     if ~disregardMAD && (isfield(ebsd.prop, 'MAD') || isfield(ebsd.prop, 'mad'))
@@ -119,12 +122,25 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         grainMeanMAD = accumarray(ebsd.grainId(validID), ebsd.prop.(madProp)(validID), [mad_max_id, 1], @mean, NaN);
     end
 
-    unique_bins = unique(bins(bins>0));
+    % Optimization: Only process clusters that contain edges (involved in pseudo-symmetry)
+    % and group them efficiently to avoid repeated find() calls.
+    involved_nodes = unique(edges(:));
+    relevant_bins_per_node = bins(involved_nodes);
     
-    for i = 1:length(unique_bins)
-        b = unique_bins(i);
-        cluster_ids = find(bins == b);
-        cluster_ids = cluster_ids(ismember(cluster_ids, grains.id));
+    [sorted_bins, sort_idx] = sort(relevant_bins_per_node);
+    sorted_nodes = involved_nodes(sort_idx);
+    
+    [~, i_start] = unique(sorted_bins, 'first');
+    [~, i_end] = unique(sorted_bins, 'last');
+    
+    grain_present_mask = false(maxId, 1);
+    grain_present_mask(grains.id) = true;
+    
+    host_assignments = zeros(maxId, 1);
+
+    for i = 1:length(i_start)
+        cluster_ids = sorted_nodes(i_start(i):i_end(i));
+        cluster_ids = cluster_ids(grain_present_mask(cluster_ids));
         
         if length(cluster_ids) < 2, continue; end
         
@@ -159,67 +175,44 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         
         if host_id == 0, continue; end
 
-        % Get host orientation
-        ori_host = grains(grains.id2ind(host_id)).meanOrientation;
-        
-        % For troubleshooting
-        % fig = figure;
-        % plot(grains(grains.id2ind(cluster_ids)), grains(grains.id2ind(cluster_ids)).meanOrientation)
-        % hold on
-        % nextAxis
-        % plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
-        % hold on
-        % plot(grains(grains.id2ind(speckle_ids)), 'FaceColor','b')
-        % nextAxis
-        % plot(grains(grains.id2ind(cluster_ids)))
-        % hold on
-        % plot(grains(grains.id2ind(host_id)), 'FaceColor','RebeccaPurple')
-
-        % Determine rotations for all other grains to be merged into the host
-        all_syms = [pseudoSym, inv(pseudoSym)]; % Consider inverse symmetries too
-        for k = 1:length(cluster_ids)
-            s_id = cluster_ids(k);
-            if s_id == host_id, continue; end
-            
-            % Only rotate and merge if the grain is actually a speckle
-            if ~isSpeckle(s_id)
-                continue;
-            end
-            
-            ori_speckle = grains(grains.id2ind(s_id)).meanOrientation;
-
-           % Exclude grains that already have an orientation close to the host
-            if angle(ori_speckle, ori_host) < 10*degree
-                hold on
-                % For troubleshooting
-                % plot(grains(grains.id2ind(s_id)), 'FaceColor','w')
-                continue;
-            end
-            
-            % Find optimal symmetry to match host
-            mori = inv(ori_speckle) * ori_host;
-            
-            [~, sym_idx] = min(angle(mori, all_syms));
-            rotations(s_id) = all_syms(sym_idx);
-            hold on
-
-            % For troubleshooting
-            % plot(grains(grains.id2ind(s_id)), 'FaceColor','k')
-        end
-        % For troubleshooting
-        % close(fig)
-
-        % Flag all internal pseudo-sym boundaries within this cluster for merging
-        % Only merge boundaries where at least one side is a speckle.
-        % (Preserves boundaries between two "real" grains even if they are pseudo-symmetric)
-        ids_in_cluster = ismember(gB_ps.grainId(:,1), cluster_ids) & ismember(gB_ps.grainId(:,2), cluster_ids);
-        at_least_one_speckle = isSpeckle(gB_ps.grainId(:,1)) | isSpeckle(gB_ps.grainId(:,2));
-        
-        gB_cluster_mask = ids_in_cluster & at_least_one_speckle;
-        gB_to_merge_mask = gB_to_merge_mask | gB_cluster_mask;
+        % Record assignments for vector processing later
+        % Only assign speckles to be merged into the host
+        speckles_to_map = cluster_ids(cluster_ids ~= host_id & isSpeckle(cluster_ids));
+        host_assignments(speckles_to_map) = host_id;
     end
+    
+    %% 4. Vectorized Rotation Calculation
+    s_ids = find(host_assignments > 0);
+    
+    if ~isempty(s_ids)
+        h_ids = host_assignments(s_ids);
+        
+        ori_s = grainOrientations(s_ids);
+        ori_h = grainOrientations(h_ids);
+        
+        % Check misorientation >= 10 degrees (only rotate these)
+        needs_rot = angle(ori_s, ori_h) >= 10*degree;
+        
+        s_ids_rot = s_ids(needs_rot);
+        ori_s_rot = ori_s(needs_rot);
+        ori_h_rot = ori_h(needs_rot);
+        
+        if ~isempty(s_ids_rot)
+            % Vectorized rotation calculation
+            mori = inv(ori_s_rot) .* ori_h_rot;
+            
+            all_syms = [pseudoSym, inv(pseudoSym)];
+            dists = angle(mori, all_syms);
+            [~, sym_idx] = min(dists, [], 2);
+            
+            rotations(s_ids_rot) = all_syms(sym_idx);
+        end
+    end
+    
+    % Vectorized Merge Mask
+    gB_to_merge_mask = isSpeckle(gB_ps.grainId(:,1)) | isSpeckle(gB_ps.grainId(:,2));
 
-    %% 4. Update EBSD data and Merge Grains
+    %% 5. Update EBSD data and Merge Grains
     % A. Apply rotations to EBSD data
     valid_grain_mask = ebsd.grainId > 0;
     pixel_grain_ids = ebsd.grainId(valid_grain_mask);
