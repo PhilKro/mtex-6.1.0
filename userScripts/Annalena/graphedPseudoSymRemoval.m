@@ -1,25 +1,27 @@
 function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratioThreshold, fractionThreshold, varargin)
-% GRAPHEDPSEUDOSYMREMOVAL Removes EBSD artifacts using a graph-based perimeter fraction approach.
+% GRAPHEDPSEUDOSYMREMOVAL Corrects pseudo-symmetry artifacts using graph-based clustering.
 %
-% New Strategy:
-%   1. Build a graph connecting all grains with pseudo-symmetry boundaries.
-%   2. Find connected components (clusters) in this graph.
-%   3. Within each cluster, identify "speckle" grains based on thresholds.
-%   4. Merge speckles into a designated "host" grain within the same cluster.
-%   5. The host is the largest non-speckle grain, or the "best" speckle 
-%      (lowest MAD/largest size) if all are speckles.
+% Strategy:
+%   1. Identify boundaries with misorientations matching the pseudo-symmetry.
+%   2. Construct a graph where nodes are grains and edges are pseudo-symmetry boundaries.
+%   3. Cluster connected grains (components).
+%   4. Identify "speckles" (artifacts) within clusters using perimeter/area and 
+%      boundary fraction thresholds.
+%   5. Select a "host" grain for each cluster (lowest MAD or largest size).
+%   6. Rotate speckles to match the host orientation.
+%   7. Merge speckles into the host.
 %
 % Inputs:
-%   ebsd              - EBSD data
-%   grains            - grain2d object
-%   pseudoSym         - list of pseudo-symmetry rotations
+%   ebsd              - @EBSD object
+%   grains            - @grain2d object
+%   pseudoSym         - @rotation (list of pseudo-symmetry operators)
 %   ratioThreshold    - (Optional) Threshold for Perimeter/Size ratio (default 0.37)
 %   fractionThreshold - (Optional) Threshold for PseudoBoundary/TotalBoundary (default 0.5)
-%   'disregardMAD'    - (Flag) Disregard MAD values for host determination
+%   varargin          - 'disregardMAD': flag to ignore MAD for host selection.
 %
 % Outputs:
-%   grains - Updated grains
-%   ebsd   - Updated EBSD data (orientations rotated)
+%   grains - @grain2d object (Note: geometry may be inconsistent, see warning)
+%   ebsd   - @EBSD object with corrected orientations
 
     if nargin < 4 || isempty(ratioThreshold)
         ratioThreshold = 0.2;
@@ -32,7 +34,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
 
     maxId = max(grains.id);
 
-    %% 1. Identify Pseudosymmetry Boundaries & Build Graph
+    %% 1. Identify Pseudo-Symmetry Boundaries & Build Graph
     gB = grains.boundary('indexed', 'indexed');
     
     isPseudo = false(size(gB));
@@ -54,7 +56,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     end
 
     G = graph(edges(:,1), edges(:,2), [], maxId);
-    bins = conncomp(G); % `bins(i)` is the cluster ID for grain with ID `i`
+    bins = conncomp(G);
 
     %% For testing: Plot the clusters
     % clusterIds = zeros(length(grains),1);
@@ -71,8 +73,8 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     % colormap(cmap(randperm(50), :));
     % title('Pseudo-Symmetry Clusters');
     % drawnow;
-    %% 2. Calculate Metrics & Identify Speckles
-    % A. Total Perimeter per Grain
+    %% 2. Calculate Metrics & Identify Speckles (Artifacts)
+    % A. Calculate Total Perimeter per Grain
     all_gB = grains.boundary;
     ids_all = all_gB.grainId;
     len_all = all_gB.segLength;
@@ -83,7 +85,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     
     totalPerimeter = accumarray(flat_ids, flat_len, [maxId, 1]);
     
-    % B. Pseudosymmetry Perimeter per Grain
+    % B. Calculate Pseudo-Symmetry Perimeter per Grain
     ids_ps = gB_ps.grainId;
     len_ps = gB_ps.segLength;
     
@@ -92,7 +94,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
 
     pseudoPerimeter = accumarray(flat_ids_ps, flat_len_ps, [maxId, 1]);
     
-    % C. Calculate Ratios and Identify Speckles
+    % C. Apply Thresholds to Identify Speckles
     g_numPixel = zeros(maxId, 1);
     g_numPixel(grains.id) = grains.numPixel;
 
@@ -104,14 +106,14 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
     
     isSpeckle = (g_ratio > ratioThreshold) & (g_fraction > fractionThreshold);
 
-    %% 3. Process Clusters: Determine Rotations and Merges
+    %% 3. Process Clusters: Select Hosts & Assign Merges
     rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
     
     % Optimization: Pre-fetch orientations for O(1) lookup
     grainOrientations = orientation.nan(maxId, 1, pseudoSym(1).CS);
     grainOrientations(grains.id) = grains.meanOrientation;
     
-    % Check for MAD property to use as a tie-breaker
+    % Prepare MAD data for host selection (tie-breaker)
     useMAD = false;
     if ~disregardMAD && (isfield(ebsd.prop, 'MAD') || isfield(ebsd.prop, 'mad'))
         warning('MAD implementation is shakey!')
@@ -122,8 +124,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         grainMeanMAD = accumarray(ebsd.grainId(validID), ebsd.prop.(madProp)(validID), [mad_max_id, 1], @mean, NaN);
     end
 
-    % Optimization: Only process clusters that contain edges (involved in pseudo-symmetry)
-    % and group them efficiently to avoid repeated find() calls.
+    % Optimization: Sort bins to group clusters efficiently (avoiding find())
     involved_nodes = unique(edges(:));
     relevant_bins_per_node = bins(involved_nodes);
     
@@ -144,11 +145,11 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         
         if length(cluster_ids) < 2, continue; end
         
-        % Identify speckles and hosts within the cluster
+        % Identify speckle candidates within the cluster
         is_speckle_in_cluster = isSpeckle(cluster_ids);
         speckle_ids = cluster_ids(is_speckle_in_cluster);
         
-        if isempty(speckle_ids), continue; end % No speckles to remove in this cluster
+        if isempty(speckle_ids), continue; end
 
         % Determine the single host for the cluster
         host_id = 0;
@@ -158,8 +159,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
             cand_sizes = g_numPixel(candidates);
             
             if useMAD
-                % MAD is main criterion (if not disregarded)
-                % Constraint: Host must not be "comparatively small" (Top ~20% of candidates)
+                % Criteria: Lowest MAD, constrained to top 20% size
                 max_s = max(cand_sizes);
                 is_large_enough = cand_sizes >= 0.2 * max_s;
                 
@@ -167,7 +167,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
                 [~, min_mad_idx] = min(grainMeanMAD(valid_cands));
                 host_id = valid_cands(min_mad_idx);
             else
-                % Size is main criterion
+                % Criteria: Largest Size
                 [~, max_idx] = max(cand_sizes);
                 host_id = candidates(max_idx);
             end
@@ -175,8 +175,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         
         if host_id == 0, continue; end
 
-        % Record assignments for vector processing later
-        % Only assign speckles to be merged into the host
+        % Mark speckles for merging into the selected host
         speckles_to_map = cluster_ids(cluster_ids ~= host_id & isSpeckle(cluster_ids));
         host_assignments(speckles_to_map) = host_id;
     end
@@ -190,7 +189,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         ori_s = grainOrientations(s_ids);
         ori_h = grainOrientations(h_ids);
         
-        % Check misorientation >= 10 degrees (only rotate these)
+        % Only apply rotation if misorientation is significant (>10 deg)
         needs_rot = angle(ori_s, ori_h) >= 10*degree;
         
         s_ids_rot = s_ids(needs_rot);
@@ -198,7 +197,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         ori_h_rot = ori_h(needs_rot);
         
         if ~isempty(s_ids_rot)
-            % Vectorized rotation calculation
+            % Find best symmetry operator to match host orientation
             mori = inv(ori_s_rot) .* ori_h_rot;
             
             all_syms = [pseudoSym, inv(pseudoSym)];
@@ -209,10 +208,10 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         end
     end
     
-    % Vectorized Merge Mask
+    % Identify boundaries where at least one side is a speckle
     gB_to_merge_mask = isSpeckle(gB_ps.grainId(:,1)) | isSpeckle(gB_ps.grainId(:,2));
 
-    %% 5. Update EBSD data and Merge Grains
+    %% 5. Update EBSD Data and Merge
     % A. Apply rotations to EBSD data
     valid_grain_mask = ebsd.grainId > 0;
     pixel_grain_ids = ebsd.grainId(valid_grain_mask);
@@ -239,4 +238,8 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
         ebsd.grainId(ebsd.grainId > 0) = parentIdMap(ebsd.grainId(ebsd.grainId > 0));
         fprintf('Merged %d pseudo-symmetry boundaries.\n', length(gB_to_merge));
     end
+
+    % Final Warning
+    warning('graphedPseudoSymRemoval:garbageGrains', ...
+        'The grains output of this function is not fully consistent (garbage). Please recalculate grains using the returned ebsd variable.');
 end
