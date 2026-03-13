@@ -12,12 +12,6 @@ dir = 'userScripts/Annalena/';
 fname = 'AA-04 500 Nd 1500 Specimen 1 Site 5 Map Data 4.h5oina';
 path = append(dir, fname);
 
-
-% crystal symmetry
-% Alumina
-% CS = crystalSymmetry('32', 'x||a');
-% CS = crystalSymmetry.load("Rhenium.cif");
-
 %if loading the CS from the h5oina file
 ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
 CS = ebsd.CS;
@@ -36,7 +30,7 @@ rot = rotation.byAxisAngle(yvector,180*degree);
 ebsd = rotate(ebsd,rot,'keepEuler');
 ebsd.orientations = project2FundamentalRegion(ebsd.orientations);
 
-%% test CS
+%% test alignment of crystal reference frame with specimen coordinates
 % use this colorkey for comparison with oxford
 % ipf=ipfTSLKey(ebsd.CS);
 % this is a better suited colorkey
@@ -93,8 +87,6 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 %the grains output of this code still has a NaN orientation problem, just
 %recalculate grains
 [~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
-% figure;
-% plot(ebsd, ebsd.orientations)
 
 %% Parameter Analysis for Pseudo Symmetry Grains (Debug)
 % % Identify grains involved in pseudo-symmetry boundaries
