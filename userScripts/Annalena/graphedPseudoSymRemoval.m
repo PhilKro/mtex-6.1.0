@@ -6,7 +6,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
 %   2. Construct a graph where nodes are grains and edges are pseudo-symmetry boundaries.
 %   3. Cluster connected grains (components).
 %   4. Identify "speckles" (artifacts) within clusters using perimeter/area and 
-%      boundary fraction thresholds.
+%      pseudo-symmetry boundary fraction thresholds.
 %   5. Select a "host" grain for each cluster (lowest MAD or largest size).
 %   6. Rotate speckles to match the host orientation.
 %   7. Merge speckles into the host.

@@ -17,7 +17,7 @@ ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
 CS = ebsd.CS;
 
 %smallest possible testSet
-% ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
+ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
 
 %small testSet includes straight boundary
 % ebsd = ebsd(inpolygon(ebsd, [5 2 50 30]));
