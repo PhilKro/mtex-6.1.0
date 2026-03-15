@@ -2,30 +2,33 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
 % PSEUDOSYMMETRYCORRECTION Corrects pseudo-symmetry artifacts using graph-based clustering.
 %
 % Strategy:
-%   1. Identify boundaries with misorientations matching the pseudo-symmetry.
-%   2. Construct a graph and cluster connected grains.
-%   3. Calculate metrics (size, ratio, pseudoSymBoundaryFraction) vectorized.
-%   4. Identify "speckles" using a customizable function handle.
-%   5. Select a "host" grain for each cluster using a customizable scoring function.
-%   6. Rotate speckles to match the host orientation.
-%   7. Merge speckles into the host.
+%   1. Calculate grains internally using a tight boundary setting.
+%   2. Identify boundaries with misorientations matching the pseudo-symmetry.
+%   3. Construct a graph and cluster connected grains.
+%   4. Calculate metrics (size, ratio, pseudoSymBoundaryFraction) vectorized.
+%   5. Identify "speckles" using a customizable function handle.
+%   6. Select a "host" grain for each cluster using a customizable scoring function.
+%   7. Rotate speckles to match the host orientation.
+%   8. Clear temporary grain IDs and return the corrected EBSD data.
+%
+% Authors: Philipp Kroeker and Gemini (Google AI)
+% Note: Collaboratively refactored for modularity, vectorization, and speed.
 %
 % Inputs:
 %   ebsd      - @EBSD object
-%   grains    - @grain2d object
 %   pseudoSym - @rotation (list of pseudo-symmetry operators)
 %
 % Optional Name-Value Pairs:
 %   'SpeckleCondition'  - Function handle: @(metrics) returning logical array
 %                         Example (purely size < 50px): @(m) m.size < 50 & m.pseudoSymBoundaryFraction > 0
 %   'HostScore'         - Function handle: @(metrics) returning numeric score array
+%   'CalcGrainAngle'    - Misorientation angle for initial grain calculation (default 5*degree)
 %   'MisorientationTol' - Tolerance for pseudo-symmetry (default 5*degree)
 %   'RotationThreshold' - Minimum misorientation to host to apply rotation (default 10*degree)
 %   'UseMAD'            - Boolean to use MAD logic (lower MAD is identified as host) for hosts (default false)
 %
 % Outputs:
-%   grains - @grain2d object (Note: geometry may be inconsistent, see warning)
-%   ebsd   - @EBSD object with corrected orientations
+%   ebsd   - @EBSD object with corrected orientations and cleared grainId field
 
     %% 0. Parse Inputs & Setup Modularity
     p = inputParser;
@@ -37,22 +40,22 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     defaultHostScore = @(m) m.size; 
     
     addRequired(p, 'ebsd');
-    addRequired(p, 'grains');
     addRequired(p, 'pseudoSym');
     addParameter(p, 'SpeckleCondition', defaultSpeckleCond);
     addParameter(p, 'HostScore', defaultHostScore);
+    addParameter(p, 'CalcGrainAngle', 5*degree);
     addParameter(p, 'MisorientationTol', 5*degree);
     addParameter(p, 'RotationThreshold', 10*degree);
     addParameter(p, 'UseMAD', false);
     
-    parse(p, ebsd, grains, pseudoSym, varargin{:});
+    parse(p, ebsd, pseudoSym, varargin{:});
     opts = p.Results;
 
+    %% 1. Calculate grains with tight boundary for pseudo-symmetry identification
+    [grains, ebsd.grainId] = calcGrains(ebsd, 'angle', opts.CalcGrainAngle, 'boundary', 'tight');
     maxId = max(grains.id);
-    %% calc grains with tight boundary for pseudo-symmetry identification
-    [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
 
-    %% 1. Identify Pseudo-Symmetry Boundaries & Build Graph
+    %% 2. Identify Pseudo-Symmetry Boundaries & Build Graph
     gB = grains.boundary('indexed', 'indexed');
     
     isPseudo = false(size(gB));
@@ -87,7 +90,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     % colormap(cmap(randperm(50), :));
     % drawnow;
 
-    %% 2. Calculate Metrics & Identify Speckles
+    %% 3. Calculate Metrics & Identify Speckles
     metrics = struct();
     
     % A. Calculate Total Perimeter per Grain (Avoiding large array concatenation)
@@ -147,7 +150,8 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     isSpeckle = opts.SpeckleCondition(metrics);
     
     % figure; plot(grains); hold on; plot(grains(isSpeckle), 'FaceColor','r')
-    %% 3. Vectorized Host Selection
+    
+    %% 4. Vectorized Host Selection
     grain_present_mask = false(maxId, 1);
     grain_present_mask(grains.id) = true;
     
@@ -197,7 +201,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     speckles_to_map_mask = isSpeckle & (host_assignments > 0);
     % figure; plot(grains); hold on; plot(grains(speckles_to_map_mask), 'FaceColor','b')
 
-    %% 4. Vectorized Rotation Calculation
+    %% 5. Vectorized Rotation Calculation
     rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
     
     grainOrientations = orientation.nan(maxId, 1, pseudoSym(1).CS);
@@ -229,9 +233,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
         end
     end
     
-    gB_to_merge_mask = isSpeckle(gB_ps.grainId(:,1)) | isSpeckle(gB_ps.grainId(:,2));
-    
-    %% 5. Update EBSD Data and Merge
+    %% 6. Update EBSD Data & Cleanup
     valid_grain_mask = ebsd.grainId > 0;
     pixel_grain_ids = ebsd.grainId(valid_grain_mask);
     
@@ -246,7 +248,8 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
         fprintf('Corrected %d pixels in pseudo-symmetry artifacts.\n', length(update_indices));
     end
     
-    gB_to_merge = gB_ps(gB_to_merge_mask);
-    
-    CLEAR THE EBSD.grainId field.
+    % Clear the ebsd.grainId field so the output object is clean
+    if isfield(ebsd.prop, 'grainId')
+        ebsd.prop = rmfield(ebsd.prop, 'grainId');
+    end
 end
