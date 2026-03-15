@@ -1,4 +1,4 @@
-function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, varargin)
+function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
 % PSEUDOSYMMETRYCORRECTION Corrects pseudo-symmetry artifacts using graph-based clustering.
 %
 % Strategy:
@@ -31,7 +31,7 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     p = inputParser;
     
     % Default condition for identifying speckles
-    defaultSpeckleCond = @(m) (m.ratio > 0.2) & (m.pseudoSymBoundaryFraction > 0.3);
+    defaultSpeckleCond = @(m) (m.ratio > 0.1) & (m.pseudoSymBoundaryFraction > 0.3);
     
     % Default scoring for hosts (largest grain wins)
     defaultHostScore = @(m) m.size; 
@@ -49,7 +49,9 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     opts = p.Results;
 
     maxId = max(grains.id);
-    
+    %% calc grains with tight boundary for pseudo-symmetry identification
+    [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
+
     %% 1. Identify Pseudo-Symmetry Boundaries & Build Graph
     gB = grains.boundary('indexed', 'indexed');
     
@@ -65,6 +67,10 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
         return;
     end
     
+    % figure;
+    % plot(gB)
+    % hold on; plot(gB_ps, 'lineColor','r')
+
     edges = gB_ps.grainId;
     if ~isempty(edges)
         maxId = max(maxId, max(edges(:)));
@@ -74,6 +80,13 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     G = graph(edges(:,1), edges(:,2), [], maxId);
     bins = conncomp(G)'; % Transpose to column vector (maxId x 1)
     
+    % rng(42);
+    % cmap = hsv(50);
+    % figure;
+    % plot(grains, mod(bins - 1, 50) + 1, 'micronbar', 'off');
+    % colormap(cmap(randperm(50), :));
+    % drawnow;
+
     %% 2. Calculate Metrics & Identify Speckles
     metrics = struct();
     
@@ -87,7 +100,7 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     
     totalPerimeter = accumarray(ids_all(v1, 1), len_all(v1), [maxId, 1]) + ...
                      accumarray(ids_all(v2, 2), len_all(v2), [maxId, 1]);
-    
+   
     % B. Calculate Pseudo-Symmetry Perimeter per Grain
     ids_ps = gB_ps.grainId;
     len_ps = gB_ps.segLength;
@@ -133,6 +146,7 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     % Evaluate the SpeckleCondition
     isSpeckle = opts.SpeckleCondition(metrics);
     
+    % figure; plot(grains); hold on; plot(grains(isSpeckle), 'FaceColor','r')
     %% 3. Vectorized Host Selection
     grain_present_mask = false(maxId, 1);
     grain_present_mask(grains.id) = true;
@@ -140,9 +154,18 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     % Evaluate the modular HostScore
     scores = opts.HostScore(metrics);
     
-    % Speckles and non-existent grains cannot be hosts
-    scores(isSpeckle | ~grain_present_mask) = -Inf;
+    % Non-existent grains cannot be hosts.
+    % (Removed the isSpeckle exclusion so a cluster composed entirely of speckles
+    % still successfully selects a host based on the highest score).
+    scores(~grain_present_mask) = -Inf;
     
+    % rng(42);
+    % cmap = hsv(50);
+    % figure;
+    % plot(grains, mod(scores - 1, 50) + 1, 'micronbar', 'off');
+    % colormap(cmap(randperm(50), :));
+    % drawnow;
+
     % Vectorized finding of the max score per bin using sortrows
     gIds = (1:maxId)';
     
@@ -159,14 +182,21 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     
     % Map the winning host ID back to the clusters
     hostForBin = zeros(max(bins), 1);
-    hostForBin(uniqueBins(validBinsMask)) = sortedIds(firstIdx(validBinsMask));
+    actualHosts = sortedIds(firstIdx(validBinsMask));
+    hostForBin(uniqueBins(validBinsMask)) = actualHosts;
+    
+    % Force the chosen hosts to NOT be speckles, protecting their boundaries
+    % with other legitimate, non-speckle grains in the cluster.
+    isSpeckle(actualHosts) = false;
+    % figure; plot(grains); hold on; plot(grains(isSpeckle), 'FaceColor','r')
     
     % Map cluster hosts to individual grains
     host_assignments = hostForBin(bins);
     
     % Identify which speckles actually need mapping
-    speckles_to_map_mask = isSpeckle & (host_assignments > 0) & (gIds ~= host_assignments);
-    
+    speckles_to_map_mask = isSpeckle & (host_assignments > 0);
+    % figure; plot(grains); hold on; plot(grains(speckles_to_map_mask), 'FaceColor','b')
+
     %% 4. Vectorized Rotation Calculation
     rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
     
@@ -218,12 +248,5 @@ function [grains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym, vara
     
     gB_to_merge = gB_ps(gB_to_merge_mask);
     
-    if ~isempty(gB_to_merge)
-        [grains, parentIdMap] = merge(grains, gB_to_merge);
-        ebsd.grainId(ebsd.grainId > 0) = parentIdMap(ebsd.grainId(ebsd.grainId > 0));
-        fprintf('Merged %d pseudo-symmetry boundaries.\n', length(gB_to_merge));
-    end
-    
-    warning('pseudoSymmetryCorrection:garbageGrains', ...
-        'The grains output of this function is garbage. Please recalculate grains using the returned ebsd variable.');
+    CLEAR THE EBSD.grainId field.
 end

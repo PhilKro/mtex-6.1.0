@@ -71,7 +71,7 @@ ipf = ipfColorKey(ebsd.CS);
 [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
 
 figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Pre-cleaned grains');
-exportScaledFigure(gcf, 'Pre-cleaned grains.jpg', 'dpi', 200)
+% % exportScaledFigure(gcf, 'Pre-cleaned grains.jpg', 'dpi', 200)
 
 grains0 = grains;
 ebsd0 = ebsd;
@@ -86,8 +86,8 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 
 %the grains output of this code still has a NaN orientation problem, just
 %recalculate grains
-[~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
-
+% [~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
+[cleanedGrains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym);
 %% Parameter Analysis for Pseudo Symmetry Grains (Debug)
 % % Identify grains involved in pseudo-symmetry boundaries
 % %grains = smooth(grains, 1); 
@@ -128,7 +128,7 @@ grainColors = ipf.orientation2color(grains.meanOrientation);
 gB = grains.boundary('indexed','indexed');
 
 figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Full clean')
-exportScaledFigure(gcf, 'CleanedPseudoSym_Grains.jpg', 'dpi', 200)
+% exportScaledFigure(gcf, 'CleanedPseudoSym_Grains.jpg', 'dpi', 200)
 
 %% Plot grains with crystal shapes
 % cS = crystalShape.hex(ebsd.CS);
@@ -177,7 +177,7 @@ end
 legend show
 title('Identified Sigma Boundaries')
 hold off
-exportScaledFigure(gcf, 'Identified_Sigma_Boundaries.jpg', 'dpi', 200)
+% exportScaledFigure(gcf, 'Identified_Sigma_Boundaries.jpg', 'dpi', 200)
 
 %% 4. Calculate Grain Boundary Normal Distribution
 
@@ -205,7 +205,7 @@ title('GBND (Crystal Frame)')
 
 h = Miller(0,0,0,1, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-exportScaledFigure(gcf, 'GBND_CrystalFrame.jpg')
+% exportScaledFigure(gcf, 'GBND_CrystalFrame.jpg')
 
 figure;
 
@@ -218,7 +218,7 @@ title('GBCD for sigma boundaries (Crystal Frame)')
 
 h = Miller(0,0,0,1, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-exportScaledFigure(gcf, 'GBCD_Sigma_CrystalFrame.jpg')
+% exportScaledFigure(gcf, 'GBCD_Sigma_CrystalFrame.jpg')
 
 figure;
 
@@ -231,7 +231,7 @@ title('GBCD (recommended) for sigma boundaries (Crystal Frame)')
 
 h = Miller(0,0,0,1, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-exportScaledFigure(gcf, 'GBCD_Recommended_Sigma_CrystalFrame.jpg')
+% exportScaledFigure(gcf, 'GBCD_Recommended_Sigma_CrystalFrame.jpg')
 %% 6. Checking consistency for individual segments
 % While we can't know the exact plane for a single segment, we can check
 % if the observed trace is CONSISTENT with a specific plane .
@@ -263,4 +263,4 @@ mtexColorbar
 %plot(sigmaGBS(trace_in_maxgbcd), 'lineColor', 'r', 'lineWidth', 2, 'DisplayName', 'Consistent with GBCD max')
 legend
 title('Trace Consistency Analysis')
-exportScaledFigure(gcf, 'Trace_Consistency_Analysis.jpg', 'dpi', 200)
+% exportScaledFigure(gcf, 'Trace_Consistency_Analysis.jpg', 'dpi', 200)

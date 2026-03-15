@@ -24,7 +24,7 @@ function [grains, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, ratio
 %   ebsd   - @EBSD object with corrected orientations
 
     if nargin < 4 || isempty(ratioThreshold)
-        ratioThreshold = 0.2;
+        ratioThreshold = 0.1;
     end
     if nargin < 5 || isempty(fractionThreshold)
         fractionThreshold = 0.3;
