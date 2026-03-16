@@ -13,28 +13,28 @@ fname = 'AA-04 500 Nd 1500 Specimen 1 Site 5 Map Data 4.h5oina';
 path = append(dir, fname);
 
 %if loading the CS from the h5oina file
-ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
-CS = ebsd.CS;
+ebsd_raw = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
+CS = ebsd_raw.CS;
 
 %smallest possible testSet
-% ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
+ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
 
 %small testSet includes straight boundary
 % ebsd = ebsd(inpolygon(ebsd, [5 2 50 30]));
 
 %larger testSet includes this coral grains
-% ebsd = ebsd(inpolygon(ebsd, [5 2 50 200]));
+% ebsd_raw = ebsd_raw(inpolygon(ebsd_raw, [5 2 50 200]));
 
 %perform corrections for misaligned axes
 rot = rotation.byAxisAngle(yvector,180*degree);
-ebsd = rotate(ebsd,rot,'keepEuler');
-ebsd.orientations = project2FundamentalRegion(ebsd.orientations);
+ebsd_raw = rotate(ebsd_raw,rot,'keepEuler');
+ebsd_raw.orientations = project2FundamentalRegion(ebsd_raw.orientations);
 
 %% test alignment of crystal reference frame with specimen coordinates
 % use this colorkey for comparison with oxford
 % ipf=ipfTSLKey(ebsd.CS);
 % this is a better suited colorkey
-ipf = ipfColorKey(ebsd.CS);
+ipf = ipfColorKey(ebsd_raw.CS);
 
 % figure;
 % plot(ipf)
@@ -68,13 +68,44 @@ ipf = ipfColorKey(ebsd.CS);
 %% Initial grain reconstruction and pseudo symmetry cleanup
 % 1. Initial rough grain calc
 
-% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
+[grains_raw, ebsd_raw('indexed').grainId] = calcGrains(ebsd_raw('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
 
 % figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Pre-cleaned grains');
 % % exportScaledFigure(gcf, 'Pre-cleaned grains.jpg', 'dpi', 200)
 
-% grains0 = grains;
-% ebsd0 = ebsd;
+grains0 = grains_raw;
+ebsd0 = ebsd_raw;
+
+%% plot sigma boundaries befor cleanup
+
+sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
+sigmaNames = {'Sigma 3', 'Sigma 7', 'Sigma 13', 'Sigma 19', 'Sigma 21'};
+colors = {'r', 'g', 'b', 'c', 'm'};
+grainColors = ipf.orientation2color(grains_raw.meanOrientation);
+gB_raw = grains_raw.boundary('indexed','indexed');
+
+sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
+
+wierd_sigmas = orientation.byAxisAngle(Miller(1,-2,1,0,CS,'UVWT'), 20*degree);
+
+isSigmaAny = false(size(gB_raw));
+
+% Visualize where they are
+figure;
+plot(grains_raw, grainColors, 'faceAlpha', 0.1, 'noBoundary')
+hold on
+
+for i = 1:length(sigmas)
+    isSigma = angle(gB_raw.misorientation, sigmas(i)) < 5*degree;
+    isSigmaAny = isSigmaAny | isSigma;
+    
+    plot(gB_raw(isSigma), 'lineColor', colors{i}, 'lineWidth', 2, 'DisplayName', sigmaNames{i})
+end
+
+legend show
+title('Identified Sigma Boundaries')
+hold off
+
 %% 3. Define the pseudo symmetry (180 deg rotation around c-axis)
 % grains = grains0;
 % ebsd = ebsd0;
@@ -87,7 +118,14 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 %the grains output of this code still has a NaN orientation problem, just
 %recalculate grains
 % [~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
-ebsd_cleaned = pseudoSymmetryCorrection(ebsd, pseudoSym);
+ebsd = pseudoSymmetryCorrection(ebsd_raw, pseudoSym);
+
+%% 3. PseudoSymmetry removal ralf
+
+% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree);
+% 
+% [ebsd_cleanedRalf,grains_cleand_Ralf] = cleanUpPseudoSym(ebsd,grains,pseudoSym);
+
 %% Parameter Analysis for Pseudo Symmetry Grains (Debug)
 % % Identify grains involved in pseudo-symmetry boundaries
 % %grains = smooth(grains, 1); 
@@ -118,7 +156,7 @@ ebsd_cleaned = pseudoSymmetryCorrection(ebsd, pseudoSym);
 % figure; plot(grains.boundary); hold on; plot(grains_check, check_PA); mtexColorbar
 %% Final grain reconstruction
 
-[grains, ebsd_cleaned('indexed').grainId] = calcGrains(ebsd_cleaned('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
+[grains, ebsd('indexed').grainId] = calcGrains(ebsd('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
 
 % Smooth boundaries to get better trace directions
 grains = smooth(grains, 5);
@@ -154,11 +192,7 @@ figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Full clean')
 %% 3. Identify Sigma 3 Boundaries (The 3 Misorientation Parameters)
 
 % Define Sigma misorientations (axis <0001>)
-sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
-sigmaNames = {'Sigma 3', 'Sigma 7', 'Sigma 13', 'Sigma 19', 'Sigma 21'};
-colors = {'r', 'g', 'b', 'c', 'm'};
 
-sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
 
 isSigmaAny = false(size(gB));
 
@@ -202,8 +236,12 @@ mtexColorbar
 title('GBND (Crystal Frame)')
 
 % Annotate the expected boundary plane {0001}
-
+hold on
 h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(1,1,-2,0, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(-1,1,0,0, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
 % exportScaledFigure(gcf, 'GBND_CrystalFrame.jpg')
 
@@ -215,8 +253,12 @@ mtexColorbar
 title('GBCD for sigma boundaries (Crystal Frame)')
 
 % Annotate the expected boundary plane {0001}
-
+hold on
 h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(1,1,-2,0, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(-1,1,0,0, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
 % exportScaledFigure(gcf, 'GBCD_Sigma_CrystalFrame.jpg')
 
@@ -229,7 +271,12 @@ title('GBCD (recommended) for sigma boundaries (Crystal Frame)')
 
 % Annotate the expected boundary plane {0001}
 
+hold on
 h = Miller(0,0,0,1, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(1,1,-2,0, CS);
+annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
+h = Miller(-1,1,0,0, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
 % exportScaledFigure(gcf, 'GBCD_Recommended_Sigma_CrystalFrame.jpg')
 %% 6. Checking consistency for individual segments
