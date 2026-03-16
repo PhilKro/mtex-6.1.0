@@ -17,7 +17,7 @@ ebsd = loadEBSD_h5oina(path, 'convertEuler2SpatialReferenceFrame');
 CS = ebsd.CS;
 
 %smallest possible testSet
-ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
+% ebsd = ebsd(inpolygon(ebsd, [5 2 5 5]));
 
 %small testSet includes straight boundary
 % ebsd = ebsd(inpolygon(ebsd, [5 2 50 30]));
@@ -68,16 +68,16 @@ ipf = ipfColorKey(ebsd.CS);
 %% Initial grain reconstruction and pseudo symmetry cleanup
 % 1. Initial rough grain calc
 
-[grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
+% [grains,ebsd.grainId] = calcGrains(ebsd,'angle',5*degree, 'boundary','tight');
 
-figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Pre-cleaned grains');
+% figure; plot(grains, grains.meanOrientation, 'noBoundary'); title('Pre-cleaned grains');
 % % exportScaledFigure(gcf, 'Pre-cleaned grains.jpg', 'dpi', 200)
 
-grains0 = grains;
-ebsd0 = ebsd;
+% grains0 = grains;
+% ebsd0 = ebsd;
 %% 3. Define the pseudo symmetry (180 deg rotation around c-axis)
-grains = grains0;
-ebsd = ebsd0;
+% grains = grains0;
+% ebsd = ebsd0;
 
 pseudoSym1 = orientation.byAxisAngle(Miller(0,0,0,1,CS), 60*degree);
 pseudoSym2 = orientation.byAxisAngle(Miller(0,0,0,1,CS), 30*degree);
@@ -87,7 +87,7 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 %the grains output of this code still has a NaN orientation problem, just
 %recalculate grains
 % [~, ebsd] = graphedPseudoSymRemoval(ebsd, grains, pseudoSym, 0.1, 0.3, 'disregardMAD');
-[cleanedGrains, ebsd] = pseudoSymmetryCorrection(ebsd, grains, pseudoSym);
+ebsd_cleaned = pseudoSymmetryCorrection(ebsd, pseudoSym);
 %% Parameter Analysis for Pseudo Symmetry Grains (Debug)
 % % Identify grains involved in pseudo-symmetry boundaries
 % %grains = smooth(grains, 1); 
@@ -118,7 +118,7 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 % figure; plot(grains.boundary); hold on; plot(grains_check, check_PA); mtexColorbar
 %% Final grain reconstruction
 
-[grains, ebsd('indexed').grainId] = calcGrains(ebsd('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
+[grains, ebsd_cleaned('indexed').grainId] = calcGrains(ebsd_cleaned('indexed'), 'angle', 5*degree, 'alpha',1, 'minPixel',5);
 
 % Smooth boundaries to get better trace directions
 grains = smooth(grains, 5);
