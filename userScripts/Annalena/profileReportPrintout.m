@@ -5,7 +5,7 @@
 % 4. Update the `funcName` variable below and run this block of code.
 % 5. Optional: You can also view the results by running: profile viewer
 
-funcName = 'graphedPseudoSymRemoval'; % Set your target function here
+funcName = 'pseudoSymmetryCorrection'; % Set your target function here
 
 p = profile('info');
 idx = endsWith({p.FunctionTable.FunctionName}, funcName);
