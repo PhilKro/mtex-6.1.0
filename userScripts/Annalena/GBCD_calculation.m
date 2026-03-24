@@ -120,8 +120,8 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 
 % Version 2: Ralph aber schnell (~6000 pixel verändert)
 % veränder den threshold parameter
-[ebsd,grains, numChanged] = cleanUpPseudoSym_Phil(ebsd_raw,grains_raw,pseudoSym, 'threshold', 1.5);
-numChanged_phi
+% [ebsd,grains, numChanged] = cleanUpPseudoSym_Phil(ebsd_raw,grains_raw,pseudoSym, 'threshold', 1.5);
+% numChanged_phi
 
 % Version 3: Philipp (26000 pixel verändert)
 % ebsd = pseudoSymmetryCorrection(ebsd_raw, pseudoSym);
