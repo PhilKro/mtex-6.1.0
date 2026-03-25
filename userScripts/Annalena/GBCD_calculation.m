@@ -120,8 +120,8 @@ pseudoSym = [pseudoSym1, pseudoSym2];
 
 % Version 2: Ralph aber schnell (~6000 pixel verändert)
 % veränder den threshold parameter
-% [ebsd,grains, numChanged] = cleanUpPseudoSym_Phil(ebsd_raw,grains_raw,pseudoSym, 'threshold', 1.5);
-% numChanged_phi
+[ebsd,grains, numChanged] = cleanUpPseudoSym_Phil(ebsd_raw,grains_raw,pseudoSym, 'threshold', 1.5, 'delta', 2*degree);
+numChanged_phi
 
 % Version 3: Philipp (26000 pixel verändert)
 % ebsd = pseudoSymmetryCorrection(ebsd_raw, pseudoSym);
@@ -190,7 +190,7 @@ plot(plotgrains, grainColors, 'faceAlpha', 0.1, 'noBoundary')
 hold on
 
 for i = 1:length(sigmas)
-    isSigma = angle(plotgBs.misorientation, sigmas(i)) < 5*degree;
+    isSigma = angle(plotgBs.misorientation, sigmas(i)) < 7.5*degree;
     isSigmaAny = isSigmaAny | isSigma;
     
     plot(plotgBs(isSigma), 'lineColor', colors{i}, 'lineWidth', 2, 'DisplayName', sigmaNames{i})
@@ -251,17 +251,11 @@ hold off
 
 %% 4. Calculate Grain Boundary Normal Distribution
 
-% GBND for ALL boundaries
+% GBND for ALL boundaries (no sigmas provided)
 gbnd = calcGBND(gB,grains,'halfwidth',7.5*degree);
 
 % GBCD for sigma boundaries
-gbcd = calcGBND(gB(isSigmaAny), grains,'halfwidth',7.5*degree);
-
-% Loop through the sigmas and add up the spherical harmonics afterwards
-gbcd_reccomended = 0;
-for i = 1:length(sigmas)
-    gbcd_reccomended = gbcd_reccomended + calcGBND(gB,grains,sigmas(i),'halfwidth',7.5*degree);
-end
+gbcd = calcGBND(gB(isSigmaAny), grains) %,'halfwidth',7.5*degree);
 
 %% 5. Visualize the 5-Parameter Character
 figure;
@@ -298,23 +292,6 @@ h = Miller(-1,1,0,0, CS);
 annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
 % exportScaledFigure(gcf, 'GBCD_Sigma_CrystalFrame.jpg')
 
-figure;
-
-% Plot the GBCD, calculated the recommended way
-plot(gbcd) %, 'fundamentalRegion')
-mtexColorbar
-title('GBCD (recommended) for sigma boundaries (Crystal Frame)')
-
-% Annotate the expected boundary plane {0001}
-
-hold on
-h = Miller(0,0,0,1, CS);
-annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-h = Miller(1,1,-2,0, CS);
-annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-h = Miller(-1,1,0,0, CS);
-annotate(h, 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');
-% exportScaledFigure(gcf, 'GBCD_Recommended_Sigma_CrystalFrame.jpg')
 %% 6. Checking consistency for individual segments
 % While we can't know the exact plane for a single segment, we can check
 % if the observed trace is CONSISTENT with a specific plane .

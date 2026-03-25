@@ -24,9 +24,12 @@ rot = rotation.byAxisAngle(yvector, 180*degree);
 ebsd_raw = rotate(ebsd_raw, rot, 'keepEuler');
 ebsd_raw.orientations = project2FundamentalRegion(ebsd_raw.orientations);
 
+sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
+sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
+
 %% 2. GBCD Analysis on the WHOLE Map
 fprintf('\n--- Processing WHOLE map ---\n');
-[gbcd_whole, len_whole] = performGBCDAnalysis(ebsd_raw, CS);
+[gbcd_whole, len_whole] = performGBCDAnalysis(ebsd_raw, CS, sigmas);
 
 %% 3. Segment the Map into 4 Pieces using inpolygon
 xmin = min(ebsd_raw.x); xmax = max(ebsd_raw.x);
@@ -52,16 +55,17 @@ ebsd_q4 = ebsd_raw(inpolygon(ebsd_raw, rect4));
 
 %% 4. GBCD Analysis on the 4 Pieces
 fprintf('\n--- Processing Quadrant 1 ---\n');
-[gbcd_q1, len_q1] = performGBCDAnalysis(ebsd_q1, CS);
+[gbcd_q1, len_q1] = performGBCDAnalysis(ebsd_q1, CS, sigmas);
+% save("%s.mat", dataensatznummer, "gbcd_q1", "len_q1"); % Debug save disabled
 
 fprintf('\n--- Processing Quadrant 2 ---\n');
-[gbcd_q2, len_q2] = performGBCDAnalysis(ebsd_q2, CS);
+[gbcd_q2, len_q2] = performGBCDAnalysis(ebsd_q2, CS, sigmas);
 
 fprintf('\n--- Processing Quadrant 3 ---\n');
-[gbcd_q3, len_q3] = performGBCDAnalysis(ebsd_q3, CS);
+[gbcd_q3, len_q3] = performGBCDAnalysis(ebsd_q3, CS, sigmas);
 
 fprintf('\n--- Processing Quadrant 4 ---\n');
-[gbcd_q4, len_q4] = performGBCDAnalysis(ebsd_q4, CS);
+[gbcd_q4, len_q4] = performGBCDAnalysis(ebsd_q4, CS, sigmas);
 
 %% 5. Calculate Weighted Average
 fprintf('\nCalculating weighted average of the 4 quadrants...\n');
@@ -92,33 +96,6 @@ mtexColorbar;
 drawNow(gcm, 'figSize', 'large');
 
 %% Helper Functions
-function [gbcd, total_sigma_len] = performGBCDAnalysis(ebsd_data, CS)
-    % 1. Reconstruct grains and cleanup pseudo-symmetry
-    [grains_raw, ebsd_data.grainId] = calcGrains(ebsd_data, 'angle', 5*degree, 'alpha', 1, 'minPixel', 5);
-    
-    pseudoSym1 = orientation.byAxisAngle(Miller(0,0,0,1,CS), 60*degree);
-    pseudoSym2 = orientation.byAxisAngle(Miller(0,0,0,1,CS), 30*degree);
-    pseudoSym = [pseudoSym1, pseudoSym2];
-    
-    [~, grains, ~] = cleanUpPseudoSym_Phil(ebsd_data, grains_raw, pseudoSym, 'threshold', 1.5);
-    grains = smooth(grains, 5);
-    gB = grains.boundary('indexed', 'indexed');
-    
-    % 2. Evaluate sigma boundary properties for lengths
-    sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
-    sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
-    
-    isSigmaAny = false(size(gB));
-    for i = 1:length(sigmas)
-        isSigmaAny = isSigmaAny | (angle(gB.misorientation, sigmas(i)) < 5*degree);
-    end
-    
-    total_sigma_len = sum(gB(isSigmaAny).segLength);
-    
-    % 3. Compute recommended GBCD by adding all components
-    gbcd = calcGBND(gB(isSigmaAny), grains,'halfwidth',7.5*degree);
-end
-
 function annotateExpectedPlanes(CS)
     hold on;
     annotate(Miller(0,0,0,1, CS), 'labeled', 'backgroundColor', 'w', 'fontWeight', 'bold');

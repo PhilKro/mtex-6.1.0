@@ -10,21 +10,20 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
 %   m.mad                       : Mean Angular Deviation (requires ebsd.prop.mad).
 %
 % Strategy:
-%   1. Identify target phase from the pseudoSym operators.
-%   2. Calculate grains internally using a tight boundary setting.
-%   3. Identify boundaries within the target phase matching the pseudo-symmetry.
-%   4. Construct a graph and cluster connected target grains.
-%   5. Dynamically evaluate and calculate only the requested metrics for the target phase.
-%   6. Identify "speckles" using a customizable function handle.
-%   7. Select a "host" grain for each cluster using a customizable scoring function.
-%   8. Rotate speckles to match the host orientation.
-%   9. Clear temporary grain IDs and return the corrected EBSD data.
+%   1. Calculate grains internally using a tight boundary setting.
+%   2. Identify boundaries with misorientations matching the pseudo-symmetry.
+%   3. Construct a graph and cluster connected grains.
+%   4. Dynamically evaluate and calculate only the requested metrics.
+%   5. Identify "speckles" using a customizable function handle.
+%   6. Select a "host" grain for each cluster using a customizable scoring function.
+%   7. Rotate speckles to match the host orientation.
+%   8. Clear temporary grain IDs and return the corrected EBSD data.
 %
 % Authors: Philipp Kroeker and Gemini (Google AI)
 %
 % Inputs:
 %   ebsd      - @EBSD object
-%   pseudoSym - @rotation or @orientation (list of pseudo-symmetry operators)
+%   pseudoSym - @rotation (list of pseudo-symmetry operators)
 %
 % Optional Name-Value Pairs:
 %   'SpeckleCondition'  - Function handle: @(metrics) returning logical array
@@ -39,7 +38,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
 % Outputs:
 %   ebsd   - @EBSD object with corrected orientations and cleared grainId field
 
-    %% 0. Parse Inputs & Phase Validation
+    %% 0. Parse Inputs & Setup Modularity
     p = inputParser;
     
     % Default condition for identifying speckles
@@ -60,44 +59,12 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     parse(p, ebsd, pseudoSym, varargin{:});
     opts = p.Results;
 
-    if pseudoSym(1).CS ~= pseudoSym(1).SS
-        error('pseudoSymmetryCorrection:PhaseMismatch', ...
-            'Pseudo-symmetry operators must have identical crystal and specimen symmetry (CS == SS).');
-    end
-
-    % Identify target phase to prevent multiphase errors
-    isTargetCS = cellfun(@(x) isa(x, 'symmetry') && x == pseudoSym(1).CS, ebsd.CSList);
-    targetPhaseId = find(isTargetCS);
-
-    if isempty(targetPhaseId)
-        warning('pseudoSymmetryCorrection:PhaseNotFound', ...
-            'The pseudo-symmetry phase was not found in the EBSD data.');
-        if isfield(ebsd.prop, 'grainId')
-            ebsd.prop = rmfield(ebsd.prop, 'grainId');
-        end
-        return;
-    end
-    
-    targetPhaseName = ebsd.CSList{targetPhaseId(1)}.mineral;
-
-    %% 1. Calculate grains
-    % Calculate over the entire map to preserve structure
+    %% 1. Calculate grains with tight boundary for pseudo-symmetry identification
     [grains, ebsd.grainId] = calcGrains(ebsd, 'angle', opts.CalcGrainAngle, 'boundary', 'tight');
     maxId = max(grains.id);
-    
-    % Subset purely to the target phase for safe metric calculations
-    targetGrains = grains(targetPhaseName);
-    if isempty(targetGrains)
-        fprintf('No grains found for the target phase.\n');
-        if isfield(ebsd.prop, 'grainId')
-            ebsd.prop = rmfield(ebsd.prop, 'grainId');
-        end
-        return;
-    end
 
     %% 2. Identify Pseudo-Symmetry Boundaries & Build Graph
-    % Explicitly extract boundaries only within the target phase
-    gB = grains.boundary(targetPhaseName, targetPhaseName);
+    gB = grains.boundary('indexed', 'indexed');
     
     isPseudo = false(size(gB));
     for k = 1:length(pseudoSym)
@@ -119,15 +86,17 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
         maxId = max(maxId, max(edges(:)));
     end
     
-    % Build graph and extract cluster bins using global grain IDs
+    % Build graph and extract cluster bins
     G = graph(edges(:,1), edges(:,2), [], maxId);
     bins = conncomp(G)'; % Transpose to column vector (maxId x 1)
 
     %% 3. Dynamically Calculate Metrics
+    % If UseMAD is requested and no custom HostScore is provided, inject the MAD logic
     if opts.UseMAD && isequal(opts.HostScore, defaultHostScore)
         opts.HostScore = @(m) -m.mad - 1e6 * (m.size < 0.2 * m.clusterMaxSize);
     end
 
+    % Inspect function strings to determine required calculations
     condStr = [func2str(opts.SpeckleCondition), ' ', func2str(opts.HostScore)];
     
     needSize        = contains(condStr, '.size');
@@ -137,16 +106,17 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     needClusterMax  = contains(condStr, '.clusterMaxSize');
     needMad         = contains(condStr, '.mad');
     
+    % Resolve calculation dependencies
     needTotalPerim  = needRatio || needFraction;
     needPseudoPerim = needFraction || needTortuosity;
     needSize        = needSize || needRatio || needClusterMax;
     
     metrics = struct();
     
-    % A. Grain Size (strictly for target grains)
+    % A. Grain Size
     if needSize
         metrics.size = zeros(maxId, 1);
-        metrics.size(targetGrains.id) = targetGrains.numPixel;
+        metrics.size(grains.id) = grains.numPixel;
     end
     
     % B. Total Perimeter & Ratio
@@ -213,8 +183,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     if needMad
         madProp = 'MAD'; if isfield(ebsd.prop, 'mad'), madProp = 'mad'; end
         if isfield(ebsd.prop, madProp)
-            % Only consider MAD values belonging to the target phase
-            validID = (ebsd.grainId > 0) & ismember(ebsd.phaseId, targetPhaseId);
+            validID = ebsd.grainId > 0;
             mad_max_id = max(maxId, max(ebsd.grainId(validID)));
             grainMeanMAD = accumarray(ebsd.grainId(validID), ebsd.prop.(madProp)(validID), [mad_max_id, 1], @mean, NaN);
             metrics.mad = grainMeanMAD(1:maxId);
@@ -224,11 +193,12 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
         end
     end
 
+    % Evaluate the SpeckleCondition
     isSpeckle = opts.SpeckleCondition(metrics);
     
     %% 4. Vectorized Host Selection
     grain_present_mask = false(maxId, 1);
-    grain_present_mask(targetGrains.id) = true; % Only target phase grains can be hosts
+    grain_present_mask(grains.id) = true;
     
     scores = opts.HostScore(metrics);
     scores(~grain_present_mask) = -Inf;
@@ -256,8 +226,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     rotations = orientation.nan(maxId, 1, pseudoSym(1).CS, pseudoSym(1).SS);
     
     grainOrientations = orientation.nan(maxId, 1, pseudoSym(1).CS);
-    % Safe because targetGrains contains a single phase, preventing cell array outputs
-    grainOrientations(targetGrains.id) = targetGrains.meanOrientation; 
+    grainOrientations(grains.id) = grains.meanOrientation;
     
     s_ids = find(speckles_to_map_mask);
     
@@ -276,7 +245,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
         if ~isempty(s_ids_rot)
             mori = inv(ori_s_rot) .* ori_h_rot;
             
-            all_syms = [pseudoSym(:)', inv(pseudoSym(:)')];
+            all_syms = [pseudoSym, inv(pseudoSym)];
             dists = angle(mori, all_syms);
             [~, sym_idx] = min(dists, [], 2);
             
@@ -285,8 +254,7 @@ function [ebsd] = pseudoSymmetryCorrection(ebsd, pseudoSym, varargin)
     end
     
     %% 6. Update EBSD Data & Cleanup
-    % Update only valid points belonging to the target phase
-    valid_grain_mask = (ebsd.grainId > 0) & ismember(ebsd.phaseId, targetPhaseId);
+    valid_grain_mask = ebsd.grainId > 0;
     pixel_grain_ids = ebsd.grainId(valid_grain_mask);
     
     pixel_rots = rotations(pixel_grain_ids);
