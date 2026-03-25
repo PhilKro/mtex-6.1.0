@@ -106,6 +106,7 @@ for i = 1:numFiles
             sigmaAngles = [60, 38.21, 27.8, 46.83, 21.79] * degree;
             sigmas = orientation.byAxisAngle(Miller(0,0,0,1,CS), sigmaAngles);
             [gbcd, len] = performGBCDAnalysis(gB, grains, sigmas);
+            
             gbcd_list{i} = gbcd;
             gbcd_len_list(i) = len;
             save(matFile, 'gbcd', 'len', 'CS');
